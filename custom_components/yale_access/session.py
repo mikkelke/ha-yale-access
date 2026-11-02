@@ -1,29 +1,24 @@
-"""Private, atomically persisted Yale app session."""
+"""Private, immediately persisted Yale app session."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import json
-import os
-import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+
+from .const import SESSION_STORAGE_KEY, STORAGE_VERSION
 from .errors import UpstreamUnavailable
-
-Executor = Callable[..., Awaitable[Any]]
-Fingerprint = tuple[int, int, int, int]
-
-
-def _fingerprint(path: Path) -> Fingerprint:
-    stat = path.stat()
-    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size
 
 
 def _expiry(token: str) -> float:
+    if not isinstance(token, str):
+        raise TypeError
     encoded = token.split(".")[1]
     payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
     exp = payload["exp"]
@@ -33,67 +28,14 @@ def _expiry(token: str) -> float:
     return float(exp)
 
 
-def _read(path: Path) -> tuple[dict[str, Any], Fingerprint]:
-    before = _fingerprint(path)
-    with path.open(encoding="utf-8") as handle:
-        data = json.load(handle)
-    after = _fingerprint(path)
-    if before != after or not isinstance(data, dict):
-        raise ValueError
-    token, install_id = data.get("access_token"), data.get("install_id")
-    if (
-        not isinstance(token, str)
-        or not token
-        or not isinstance(install_id, str)
-        or not install_id
-    ):
-        raise ValueError
-    return {
-        "access_token": token,
-        "install_id": install_id,
-        "saved_at": data.get("saved_at"),
-        "exp": _expiry(token),
-    }, after
-
-
-def _write(
-    path: Path, data: dict[str, Any], expected: Fingerprint
-) -> Fingerprint | None:
-    temporary = None
-    try:
-        if _fingerprint(path) != expected:
-            return None
-        fd, temporary = tempfile.mkstemp(prefix=".yale-session-", dir=path.parent)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            json.dump(data, handle, separators=(",", ":"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        if _fingerprint(path) != expected:
-            return None
-        os.replace(temporary, path)
-        temporary = None
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-        return _fingerprint(path)
-    finally:
-        if temporary is not None:
-            try:
-                os.unlink(temporary)
-            except OSError:
-                pass
-
-
-class SessionFile:
-    def __init__(self, path: str, executor: Executor | None = None) -> None:
-        self._path = Path(path)
-        self._executor = executor or asyncio.to_thread
+class SessionStore:
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._store = Store(
+            hass, STORAGE_VERSION, SESSION_STORAGE_KEY, private=True, atomic_writes=True
+        )
         self._lock = asyncio.Lock()
         self._data: dict[str, Any] = {}
-        self._fingerprint: Fingerprint | None = None
+        self._loaded = False
         self._failed = True
         self._published: tuple[str, str | None] | None = None
         self.state_changed: Callable[[], Awaitable[None]] | None = None
@@ -123,48 +65,36 @@ class SessionFile:
             if self.state_changed is not None:
                 await self.state_changed()
 
-    async def _load(self) -> bool:
-        try:
-            fingerprint = await self._executor(_fingerprint, self._path)
-            if fingerprint != self._fingerprint:
-                self._data, self._fingerprint = await self._executor(_read, self._path)
-                self._failed = False
-        except (
-            OSError,
-            ValueError,
-            TypeError,
-            KeyError,
-            IndexError,
-            UnicodeError,
-            OverflowError,
-        ):
-            self._data = {}
-            self._fingerprint = None
-            self._failed = True
-        return bool(self.token) and not self._failed
-
-    async def load_if_changed(self) -> bool:
+    async def load(self) -> bool:
         async with self._lock:
-            loaded = await self._load()
+            if not self._loaded:
+                self._loaded = True
+                try:
+                    data = await self._store.async_load()
+                    if not isinstance(data, dict):
+                        raise TypeError
+                    token = data["access_token"]
+                    if not isinstance(token, str) or not token:
+                        raise ValueError
+                    self._data = {
+                        "access_token": token,
+                        "exp": _expiry(token),
+                        "saved_at": data.get("saved_at"),
+                    }
+                    self._failed = False
+                except Exception:  # noqa: BLE001
+                    self._data = {}
+                    self._failed = True
+            loaded = bool(self.token) and not self._failed
         await self._publish()
         return loaded
 
     async def mark_failed(self) -> None:
         async with self._lock:
-            if not await self._unchanged():
-                return
             self._failed = True
         await self._publish()
 
-    async def _unchanged(self) -> bool:
-        try:
-            return await self._executor(_fingerprint, self._path) == self._fingerprint
-        except OSError:
-            return False
-
     async def rotate(self, token: str) -> None:
-        if not isinstance(token, str) or not token:
-            return
         try:
             exp = _expiry(token)
         except (
@@ -177,33 +107,26 @@ class SessionFile:
         ):
             raise UpstreamUnavailable("Yale returned an invalid session") from None
         async with self._lock:
+            if token == self.token and not self._failed:
+                return
+            data = {
+                "access_token": token,
+                "saved_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "exp": exp,
+            }
             try:
-                if not await self._unchanged():
-                    return
-                if token == self.token:
-                    return
-                data = {
-                    "access_token": token,
-                    "install_id": self._data["install_id"],
-                    "saved_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                    "exp": exp,
-                }
-                fingerprint = await self._executor(
-                    _write, self._path, data, self._fingerprint
-                )
-                if fingerprint is not None:
-                    self._data, self._fingerprint = data, fingerprint
-                    self._failed = False
-            except (
-                OSError,
-                ValueError,
-                TypeError,
-                KeyError,
-                IndexError,
-                UnicodeError,
-                OverflowError,
-            ):
+                await self._store.async_save(data)
+                if await self._store.async_load() != data:
+                    raise UpstreamUnavailable("Yale session could not be saved")
+            except Exception:  # noqa: BLE001
                 self._failed = True
                 raise UpstreamUnavailable("Yale session could not be saved") from None
+            else:
+                self._data = data
+                self._loaded = True
+                self._failed = False
             finally:
                 await self._publish()
+
+    async def remove(self) -> None:
+        await self._store.async_remove()

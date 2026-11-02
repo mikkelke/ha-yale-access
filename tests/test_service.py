@@ -1447,3 +1447,21 @@ async def test_custom_pin_uses_length_from_current_records(command):
     else:
         await service.set_pin(ADMIN, UID_A, "6543")
         assert await service.pin(ADMIN, UID_A) == {"pin": "6543"}
+
+
+async def test_configuration_choices_include_protected_keypad_and_app_users():
+    client = Client()
+    client.members[UID_IMPORTED] = {"FirstName": "App", "UserType": "Guest"}
+    client.body["loaded"] = [record(UID_A, 3)]
+    service, client, _ = await make_service(client, protected_users=[UID_A])
+    choices = await service.async_user_choices()
+    assert choices == {
+        UID_IMPORTED: "Guest Placeholder (app user)",
+        UID_A: "Guest Placeholder (keypad slot 3)",
+    }
+    assert UID_A not in {
+        row["user_id"] for row in (await service.list_users(ADMIN))["users"]
+    }
+    client.calls.clear()
+    assert await service.async_user_choices() == choices
+    assert client.calls == []

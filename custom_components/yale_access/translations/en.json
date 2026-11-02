@@ -1,8 +1,125 @@
 {
-  "issues": {
-    "login": {
-      "title": "Yale app login needs attention",
-      "description": "{command}. The integration reloads the session file automatically."
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sign in to Yale Access",
+        "description": "Use your Yale Home account to manage one lock.",
+        "data": {
+          "country": "Country code",
+          "method": "Login method",
+          "identifier": "Email address or phone number",
+          "password": "Password"
+        },
+        "data_description": {
+          "country": "Two uppercase letters, for example US or DK.",
+          "identifier": "Use the identifier registered with your Yale account."
+        }
+      },
+      "verify": {
+        "title": "Verify your Yale account",
+        "description": "Enter the six-digit verification code Yale sent you.",
+        "data": {
+          "code": "Verification code"
+        }
+      },
+      "lock": {
+        "title": "Choose a lock",
+        "description": "Select the lock to manage with Home Assistant.",
+        "data": {
+          "lock_id": "Lock"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in to Yale Access again",
+        "description": "Sign in with an account that can access the configured lock.",
+        "data": {
+          "method": "Login method",
+          "identifier": "Email address or phone number",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Yale rejected these login details. Check your account and password.",
+      "invalid_code": "The verification code is invalid. Enter the six-digit code Yale sent you.",
+      "cannot_connect": "Unable to connect to Yale. Try again.",
+      "unknown": "Yale returned an unexpected response. Try again."
+    },
+    "abort": {
+      "no_locks": "No locks are available to this Yale account.",
+      "already_configured": "This lock is already configured.",
+      "wrong_account": "This Yale account cannot access the configured lock.",
+      "reauth_successful": "Reauthentication was successful.",
+      "single_instance_allowed": "Only one Yale Access integration can be configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure Yale Access",
+        "menu_options": {
+          "person": "Person",
+          "protected": "Protected users",
+          "notify": "Notifications"
+        }
+      },
+      "person": {
+        "title": "Choose a person",
+        "description": "Select the Home Assistant user whose access you want to configure.",
+        "data": {
+          "ha_user_id": "Home Assistant user"
+        }
+      },
+      "person_details": {
+        "title": "Configure access",
+        "description": "Set the role, own Yale user and assigned Yale users. Select None to remove this person's integration access.",
+        "data": {
+          "role": "Role",
+          "own_yale_user": "Own Yale user",
+          "yale_users": "Assigned Yale users"
+        },
+        "data_description": {
+          "own_yale_user": "Allows this person to view and change their own code, including when protected.",
+          "yale_users": "Additional Yale users this person may manage."
+        }
+      },
+      "protected": {
+        "title": "Protected users",
+        "description": "Hide these Yale users from lists and protect their access. Configured own-code controls remain available.",
+        "data": {
+          "protected_users": "Protected Yale users"
+        }
+      },
+      "notify": {
+        "title": "Login notifications",
+        "description": "Optionally choose a notification service for the administrator's login-health alerts. Leave empty to disable alerts.",
+        "data": {
+          "notify": "Notification service"
+        }
+      }
+    },
+    "error": {
+      "yale_user_taken": "A Yale user can only be selected once across all own and assigned users.",
+      "cannot_connect": "Unable to retrieve Yale users. Try again.",
+      "unknown": "An unexpected error occurred. Try again."
+    },
+    "abort": {
+      "not_loaded": "Yale Access must be loaded before it can be configured."
+    }
+  },
+  "selector": {
+    "method": {
+      "options": {
+        "email": "Email",
+        "phone": "Phone"
+      }
+    },
+    "role": {
+      "options": {
+        "none": "None",
+        "admin": "Administrator",
+        "guests": "Guest manager"
+      }
     }
   }
 }

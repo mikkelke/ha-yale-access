@@ -25,7 +25,10 @@ async def _run(
     msg: dict[str, Any],
     call: Callable[[YaleAccessService, MappedUser], Awaitable[dict[str, Any]]],
 ) -> None:
-    service: YaleAccessService = hass.data[DOMAIN]
+    service: YaleAccessService | None = hass.data.get(DOMAIN)
+    if service is None:
+        connection.send_error(msg["id"], "not_ready", "Yale Access is not loaded")
+        return
     try:
         user = service.users.require(getattr(connection.user, "id", None))
         result = await call(service, user)

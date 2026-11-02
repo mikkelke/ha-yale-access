@@ -102,6 +102,21 @@ class YaleAccessService:
     def pin_length(self) -> int:
         return self._pin_length
 
+    async def async_user_choices(self) -> dict[str, str]:
+        async with self._lock:
+            if not self._ready:
+                await self._refresh()
+            choices = {}
+            for uid, row in sorted(
+                self._rows.items(),
+                key=lambda item: (item[1]["name"].casefold(), item[0]),
+            ):
+                kind = (
+                    "app user" if row["slot"] is None else f"keypad slot {row['slot']}"
+                )
+                choices[uid] = f"{row['name']} ({kind})"
+            return choices
+
     async def load(self) -> None:
         raw = await self._store.async_load()
         if raw is None:

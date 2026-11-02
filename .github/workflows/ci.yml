@@ -13,7 +13,7 @@ jobs:
         with:
           python-version: "3.14"
       - name: Install dependencies
-        run: pip install homeassistant==2026.10.1 pytest pytest-asyncio ruff
+        run: pip install pytest-homeassistant-custom-component==0.13.375 ruff
       - name: Run tests
         run: pytest tests/ -v
       - name: Lint

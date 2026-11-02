@@ -1,18 +1,16 @@
-"""Session file persistence and health."""
+"""Session store persistence and health."""
 
 from __future__ import annotations
 
 import base64
 import json
-import os
-import stat
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from custom_components.yale_access.errors import UpstreamUnavailable
-from custom_components.yale_access.session import SessionFile
+from custom_components.yale_access.session import SessionStore
 
 
 def token(days: int, label: str = "placeholder") -> str:
@@ -26,88 +24,42 @@ def token(days: int, label: str = "placeholder") -> str:
     return f"placeholder.{encoded}.placeholder"
 
 
-def write_session(path, value: str) -> None:
-    path.write_text(
-        json.dumps(
-            {
-                "access_token": value,
-                "install_id": "placeholder-install-id",
-                "saved_at": "placeholder",
-                "exp": 1,
-            }
-        )
+def make_session(value: str | None = None) -> SessionStore:
+    store = Mock(
+        async_load=AsyncMock(return_value={"access_token": value} if value else None),
+        async_save=AsyncMock(),
+        async_remove=AsyncMock(),
     )
 
+    async def save(data):
+        store.async_load.return_value = dict(data)
 
-@pytest.mark.asyncio
-async def test_rotation_is_atomic_and_mode_600(tmp_path):
-    path = tmp_path / "session.json"
+    store.async_save.side_effect = save
+    with patch("custom_components.yale_access.session.Store", return_value=store):
+        return SessionStore(Mock())
+
+
+async def test_rotation_is_immediately_persisted_and_private(hass, hass_storage):
     original, rotated = token(60), token(120)
-    write_session(path, original)
-    session = SessionFile(str(path))
-    assert await session.load_if_changed()
-    inode = path.stat().st_ino
+    session = SessionStore(hass)
+    assert session._store._private
+    await session.rotate(original)
+    assert await session.load()
     await session.rotate(rotated)
-    data = json.loads(path.read_text())
+    data = hass_storage["yale_access.session"]["data"]
     assert data["access_token"] == rotated
-    assert data["install_id"] == "placeholder-install-id"
-    assert data["exp"] > 1
-    assert set(data) == {"access_token", "install_id", "saved_at", "exp"}
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert path.stat().st_ino != inode
-    assert list(tmp_path.iterdir()) == [path]
+    assert set(data) == {"access_token", "saved_at", "exp"}
     assert rotated not in repr(session)
 
 
-@pytest.mark.asyncio
-async def test_stale_rotation_leaves_relogin_for_next_load(tmp_path):
-    path = tmp_path / "session.json"
-    original = token(60)
-    write_session(path, original)
-    session = SessionFile(str(path))
-    await session.load_if_changed()
-    relogin = token(120, "relogin")
-    replacement = tmp_path / "replacement"
-    write_session(replacement, relogin)
-    os.replace(replacement, path)
-    await session.rotate(token(90, "stale-response"))
-    assert session.token == original
-    assert json.loads(path.read_text())["access_token"] == relogin
-    assert await session.load_if_changed()
-    assert session.token == relogin
-
-
-@pytest.mark.asyncio
-async def test_stale_auth_failure_leaves_relogin_for_next_load(tmp_path):
-    path = tmp_path / "session.json"
-    original = token(60)
-    write_session(path, original)
-    session = SessionFile(str(path))
-    await session.load_if_changed()
-    relogin = token(120, "relogin")
-    replacement = tmp_path / "replacement"
-    write_session(replacement, relogin)
-    os.replace(replacement, path)
-    await session.mark_failed()
-    assert session.state == "ok"
-    assert session.token == original
-    assert json.loads(path.read_text())["access_token"] == relogin
-    assert await session.load_if_changed()
-    assert session.token == relogin
-    assert session.state == "ok"
-
-
-@pytest.mark.asyncio
-async def test_states_and_only_changed_callbacks(tmp_path):
-    path = tmp_path / "session.json"
-    write_session(path, token(60))
-    session = SessionFile(str(path))
+async def test_states_and_only_changed_callbacks():
+    session = make_session(token(60))
     session.state_changed = AsyncMock()
-    await session.load_if_changed()
+    assert await session.load()
     assert session.state == "ok"
     assert session.expires.endswith("Z")
     assert session.state_changed.await_count == 1
-    await session.load_if_changed()
+    assert await session.load()
     assert session.state_changed.await_count == 1
     await session.rotate(token(7))
     assert session.state == "expiring"
@@ -115,44 +67,32 @@ async def test_states_and_only_changed_callbacks(tmp_path):
     assert session.state == "failed"
     await session.mark_failed()
     assert session.state_changed.await_count == 3
-    assert not await session.load_if_changed()
-    write_session(path, token(120))
-    assert await session.load_if_changed()
+    assert not await session.load()
+    assert session._store.async_load.await_count == 2
+    await session.rotate(token(120))
     assert session.state == "ok"
 
 
-@pytest.mark.asyncio
-async def test_unreadable_or_malformed_session_is_failed(tmp_path):
-    path = tmp_path / "session.json"
-    session = SessionFile(str(path))
-    assert not await session.load_if_changed()
+@pytest.mark.parametrize("data", [None, [], {}, {"access_token": "invalid"}])
+async def test_unreadable_or_malformed_session_is_failed(data):
+    session = make_session()
+    session._store.async_load.return_value = data
+    assert not await session.load()
     assert session.state == "failed"
     assert session.expires is None
-    path.write_text("not json")
-    assert not await session.load_if_changed()
-    write_session(path, "invalid")
-    assert not await session.load_if_changed()
 
 
-@pytest.mark.asyncio
-async def test_failed_persistence_is_sanitized(tmp_path, monkeypatch):
-    path = tmp_path / "session.json"
-    write_session(path, token(60))
-    session = SessionFile(str(path))
-    await session.load_if_changed()
+async def test_failed_persistence_is_sanitized():
+    session = make_session(token(60))
+    await session.load()
     replacement = token(120)
-    monkeypatch.setattr(
-        "custom_components.yale_access.session.os.replace",
-        lambda *args: (_ for _ in ()).throw(OSError(replacement)),
-    )
+    session._store.async_save.side_effect = OSError(replacement)
     with pytest.raises(UpstreamUnavailable) as error:
         await session.rotate(replacement)
     assert replacement not in str(error.value)
     assert session.state == "failed"
-    assert list(tmp_path.iterdir()) == [path]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload",
     [
@@ -163,16 +103,52 @@ async def test_failed_persistence_is_sanitized(tmp_path, monkeypatch):
         {"exp": "placeholder"},
     ],
 )
-async def test_malformed_expiry_is_sanitized(tmp_path, payload):
-    path = tmp_path / "session.json"
+async def test_malformed_expiry_is_sanitized(payload):
     encoded = (
         base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     )
     malformed = f"placeholder.{encoded}.placeholder"
-    write_session(path, malformed)
-    session = SessionFile(str(path))
-    assert not await session.load_if_changed()
+    session = make_session(malformed)
+    assert not await session.load()
     assert session.state == "failed"
     with pytest.raises(UpstreamUnavailable) as error:
         await session.rotate(malformed)
     assert malformed not in str(error.value)
+
+
+async def test_remove_deletes_store(hass):
+    session = SessionStore(hass)
+    await session.rotate(token(60))
+    await session.remove()
+    assert await SessionStore(hass)._store.async_load() is None
+
+
+@pytest.mark.parametrize("existing", [False, True])
+async def test_store_swallowed_write_failure_does_not_accept_token(
+    hass, hass_storage, monkeypatch, caplog, existing
+):
+    from homeassistant.util.file import WriteError
+
+    session = SessionStore(hass)
+    original = token(60) if existing else None
+    if original is not None:
+        await session.rotate(original)
+    session.state_changed = AsyncMock()
+    replacement = token(120)
+    monkeypatch.setattr(
+        session._store,
+        "_async_write_data",
+        AsyncMock(side_effect=WriteError("Storage unavailable")),
+    )
+    with pytest.raises(UpstreamUnavailable) as error:
+        await session.rotate(replacement)
+    assert str(error.value) == "Yale session could not be saved"
+    assert session.state == "failed"
+    assert session.token == original
+    session.state_changed.assert_awaited_once()
+    assert replacement not in caplog.text
+    assert replacement not in str(error.value)
+    if existing:
+        assert hass_storage["yale_access.session"]["data"]["access_token"] == original
+    else:
+        assert "yale_access.session" not in hass_storage

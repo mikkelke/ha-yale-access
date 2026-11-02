@@ -20,7 +20,7 @@ from .errors import (
     RequestFailed,
     UpstreamUnavailable,
 )
-from .session import SessionFile
+from .session import SessionStore
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -44,7 +44,7 @@ class YaleClient:
     def __init__(
         self,
         session: ClientSession,
-        session_file: SessionFile,
+        session_store: SessionStore,
         lock_id: str,
         *,
         country: str = DEFAULT_COUNTRY,
@@ -52,7 +52,7 @@ class YaleClient:
         if not isinstance(country, str) or not re.fullmatch(r"[A-Z]{2}", country):
             raise InvalidRequest("Invalid country code (two uppercase letters)")
         self._session = session
-        self._session_file = session_file
+        self._session_store = session_store
         self._country = country
         self.lock_id = lock_id
         self._lock_path = "/locks/" + _identifier(lock_id)
@@ -61,8 +61,8 @@ class YaleClient:
             session._retry_connection = False
 
     @property
-    def session_file(self) -> SessionFile:
-        return self._session_file
+    def session_store(self) -> SessionStore:
+        return self._session_store
 
     async def detail(self) -> dict[str, Any]:
         return await self._send("GET", self._lock_path, "lock detail")
@@ -149,7 +149,7 @@ class YaleClient:
         body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         async with self._request_lock:
-            if not await self._session_file.load_if_changed():
+            if not await self._session_store.load():
                 raise UpstreamUnavailable("Yale login is unavailable")
             headers = {
                 "x-api-key": APP_API_KEY,
@@ -158,7 +158,7 @@ class YaleClient:
                 "accept-version": version,
                 "User-Agent": USER_AGENT,
                 "content-type": "application/json",
-                "x-access-token": self._session_file.token,
+                "x-access-token": self._session_store.token,
             }
             url = BASE_URL + path
             if params:
@@ -180,9 +180,9 @@ class YaleClient:
                         status = response.status
                         rotated = response.headers.get("x-access-token")
                         if rotated:
-                            await self._session_file.rotate(rotated)
+                            await self._session_store.rotate(rotated)
                         if status in (401, 403) and (method == "GET" or status == 401):
-                            await self._session_file.mark_failed()
+                            await self._session_store.mark_failed()
                         if not 200 <= status < 300:
                             if status == 404:
                                 raise NotFound

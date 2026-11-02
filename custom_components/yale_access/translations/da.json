@@ -1,0 +1,125 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Log ind på Yale Access",
+        "description": "Brug din Yale Home-konto til at administrere én lås.",
+        "data": {
+          "country": "Landekode",
+          "method": "Loginmetode",
+          "identifier": "E-mailadresse eller telefonnummer",
+          "password": "Adgangskode"
+        },
+        "data_description": {
+          "country": "To store bogstaver, for eksempel US eller DK.",
+          "identifier": "Brug den e-mailadresse eller det telefonnummer, der er registreret på din Yale-konto."
+        }
+      },
+      "verify": {
+        "title": "Bekræft din Yale-konto",
+        "description": "Indtast den sekscifrede bekræftelseskode, som Yale har sendt til dig.",
+        "data": {
+          "code": "Bekræftelseskode"
+        }
+      },
+      "lock": {
+        "title": "Vælg en lås",
+        "description": "Vælg den lås, du vil administrere med Home Assistant.",
+        "data": {
+          "lock_id": "Lås"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Log ind på Yale Access igen",
+        "description": "Log ind med en konto, der har adgang til den konfigurerede lås.",
+        "data": {
+          "method": "Loginmetode",
+          "identifier": "E-mailadresse eller telefonnummer",
+          "password": "Adgangskode"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Yale afviste loginoplysningerne. Kontrollér din konto og adgangskode.",
+      "invalid_code": "Bekræftelseskoden er ugyldig. Indtast den sekscifrede kode, som Yale har sendt til dig.",
+      "cannot_connect": "Kunne ikke oprette forbindelse til Yale. Prøv igen.",
+      "unknown": "Yale returnerede et uventet svar. Prøv igen."
+    },
+    "abort": {
+      "no_locks": "Denne Yale-konto har ingen tilgængelige låse.",
+      "already_configured": "Denne lås er allerede konfigureret.",
+      "wrong_account": "Denne Yale-konto har ikke adgang til den konfigurerede lås.",
+      "reauth_successful": "Du er nu logget ind igen.",
+      "single_instance_allowed": "Der kan kun konfigureres én Yale Access-integration."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Konfigurér Yale Access",
+        "menu_options": {
+          "person": "Person",
+          "protected": "Beskyttede brugere",
+          "notify": "Notifikationer"
+        }
+      },
+      "person": {
+        "title": "Vælg en person",
+        "description": "Vælg den Home Assistant-bruger, du vil konfigurere adgang for.",
+        "data": {
+          "ha_user_id": "Home Assistant-bruger"
+        }
+      },
+      "person_details": {
+        "title": "Konfigurér adgang",
+        "description": "Angiv rolle, egen Yale-bruger og tildelte Yale-brugere. Vælg Ingen for at fjerne personens adgang til integrationen.",
+        "data": {
+          "role": "Rolle",
+          "own_yale_user": "Egen Yale-bruger",
+          "yale_users": "Tildelte Yale-brugere"
+        },
+        "data_description": {
+          "own_yale_user": "Lader personen se og ændre sin egen kode, også når brugeren er beskyttet.",
+          "yale_users": "Andre Yale-brugere, som personen må administrere."
+        }
+      },
+      "protected": {
+        "title": "Beskyttede brugere",
+        "description": "Skjul disse Yale-brugere fra lister, og beskyt deres adgang. Konfigurerede funktioner til egen kode er stadig tilgængelige.",
+        "data": {
+          "protected_users": "Beskyttede Yale-brugere"
+        }
+      },
+      "notify": {
+        "title": "Loginnotifikationer",
+        "description": "Vælg eventuelt en notifikationstjeneste til administratorens loginadvarsler. Lad feltet være tomt for at deaktivere advarsler.",
+        "data": {
+          "notify": "Notifikationstjeneste"
+        }
+      }
+    },
+    "error": {
+      "yale_user_taken": "En Yale-bruger må kun vælges én gang på tværs af egne og tildelte brugere.",
+      "cannot_connect": "Kunne ikke hente Yale-brugere. Prøv igen.",
+      "unknown": "Der opstod en uventet fejl. Prøv igen."
+    },
+    "abort": {
+      "not_loaded": "Yale Access skal være indlæst, før integrationen kan konfigureres."
+    }
+  },
+  "selector": {
+    "method": {
+      "options": {
+        "email": "E-mail",
+        "phone": "Telefon"
+      }
+    },
+    "role": {
+      "options": {
+        "none": "Ingen",
+        "admin": "Administrator",
+        "guests": "Gæsteadministrator"
+      }
+    }
+  }
+}

@@ -10,7 +10,8 @@
 A Home Assistant custom integration for listing Yale lock users and managing guest
 PINs through Home Assistant's authenticated WebSocket API. Administrators and guest
 managers receive different access, and residents can view and change their own code.
-Configuration is YAML only; the integration includes a login health sensor and no frontend.
+Login and configuration are handled in Home Assistant. The integration includes a
+login health sensor; code management uses your own dashboard.
 
 **Unofficial, not affiliated with Yale or ASSA ABLOY.** This integration uses the Yale
 Home app's API and may break when the app changes.
@@ -30,7 +31,6 @@ Home app's API and may break when the app changes.
 - A Yale lock with a keypad and a working Yale Connect / Wi-Fi bridge.
 - A Yale Home account with owner rights for the lock.
 - Home Assistant **2026.10.0 or newer**.
-- Python **3.12+** and `aiohttp` wherever you run the standalone login helper.
 
 One lock is configured per Home Assistant installation.
 
@@ -41,130 +41,62 @@ One lock is configured per Home Assistant installation.
 1. In HACS, open the menu and select **Custom repositories**.
 2. Add `https://github.com/mikkelke/ha-yale-access` with category **Integration**.
 3. Find **Yale Access** and download it.
-4. Complete [Logging in](#logging-in) and [Configuration](#configuration), then restart Home Assistant.
+4. Restart Home Assistant, then follow [Setup](#setup).
 
 ### Manual
 
 1. Download the repository and copy `custom_components/yale_access` into your Home
    Assistant configuration directory's `custom_components` folder.
-2. Complete [Logging in](#logging-in) and [Configuration](#configuration), then restart Home Assistant.
+2. Restart Home Assistant, then follow [Setup](#setup).
 
-The login helper is a separate file: download `tools/yale_login.py` from this repository
-for either installation method.
+## Setup
 
-## Logging in
+1. Open **Settings → Devices & services → Add integration → Yale Access**.
+2. Confirm the two-letter uppercase country code. It defaults to Home Assistant's
+   configured country, or `US` when no country is configured.
+3. Choose **Email** or **Phone**, enter your Yale account identifier and password,
+   and submit.
+4. If Yale requires verification, enter the six-digit code it sends you.
+5. If your account has several locks, select the lock to manage. A single lock is
+   selected automatically. The account must have access to at least one lock.
 
-Choose one of the following methods. The helper privately prompts for your Yale
-account identifier, password, and verification code when required. Use the same
-uppercase two-letter country code here and in YAML; the default is `US`. For example,
-use `--country DK` and `country: DK` for Denmark.
-
-### Inside the Home Assistant container
-
-Save the helper as `/config/yale_login.py`, then run this on the Docker host:
-
-```sh
-docker exec -it homeassistant python3 /config/yale_login.py --country US
-```
-
-Replace `homeassistant` with your container's name. The default session file is
-`/config/.yale_app_session.json`. The Home Assistant container already includes `aiohttp`.
-
-### Advanced SSH & Web Terminal add-on
-
-Save the helper as `/config/yale_login.py`. The add-on needs Python 3.12+ and `aiohttp`;
-add `python3` and `py3-aiohttp` to its `packages` option if needed, then restart the
-add-on. Open its terminal and run:
-
-```sh
-python3 /config/yale_login.py --session-file /config/.yale_app_session.json --country US
-```
-
-### On any computer
-
-Download the helper, open a terminal in that directory, and run with Python 3.12+:
-
-```sh
-pip install aiohttp
-python3 yale_login.py --session-file ./yale_app_session.json --country US
-```
-
-Copy `yale_app_session.json` into Home Assistant's `/config` directory as
-`.yale_app_session.json`, or set `session_file` to the destination you chose. Make
-sure Home Assistant can read and replace the file, and restrict its permissions to
-`600` on the Home Assistant host:
-
-```sh
-chmod 600 /config/.yale_app_session.json
-```
-
-The session refreshes itself as Yale returns new tokens. `sensor.yale_access_login`
-reports `ok`, `expiring` (less than 14 days remaining), or `failed`. The configured
-notification service and a Repairs issue warn when login needs attention. Run the
-helper again and replace the same session file; Home Assistant reloads it automatically,
-without a restart. Server policy may still require occasional new logins.
-
-## Finding your ids
-
-After login, the helper lists each accessible lock's **lock id**, **name**, and
-**house name**, followed by its users' **Yale user ids**, **first and last names**,
-and **types** such as `superuser` or `user`. Keypad-only users are listed as
-`pin only` with their slot. It prints no tokens or PINs.
-To repeat this using an existing session without logging in:
-
-```sh
-python3 yale_login.py --session-file ./yale_app_session.json --country US --list-only
-```
-
-Use the selected lock's id for `lock_id`. Use its user ids for `protected_users`,
-`own_yale_user`, and `yale_users`. Yale user types describe the Yale account;
-Home Assistant permissions are controlled separately by the roles below.
-
-For Home Assistant user ids, enable **Advanced mode** in your Home Assistant profile,
-then open **Settings → People → Users**, select a user, and copy their **ID**.
-Quote these 32-character hexadecimal ids in YAML.
+One lock is supported per Home Assistant installation. The integration starts with
+no people configured, so access to its WebSocket API is denied until you configure
+people below.
 
 ## Configuration
 
-Add this to `configuration.yaml`, replacing every placeholder. The same example is
-in [`examples/configuration.yaml`](examples/configuration.yaml). Restart Home Assistant
-after configuration changes.
+Open **Settings → Devices & services → Yale Access → Configure**. Each saved change
+reloads the integration.
 
-```yaml
-yale_access:
-  session_file: /config/.yale_app_session.json
-  country: US
-  lock_id: "<Yale lock id>"
-  notify: notify.mobile_app_<admin_device>
-  protected_users:
-    - "<admin Yale user id>"
-  users:
-    - ha_user_id: "<admin Home Assistant user id: 32 hex characters>"
-      role: admin
-      own_yale_user: "<admin Yale user id>"
-    - ha_user_id: "<guest manager Home Assistant user id: 32 hex characters>"
-      role: guests
-      own_yale_user: "<guest manager Yale user id>"
-      yale_users:
-        - "<assigned guest Yale user id>"
-```
+- **Person:** Select an active Home Assistant user, then set their role to `admin`
+  or `guests`. Optionally select their own Yale user for own-code controls and
+  assign other Yale users they should manage. Select `none` to remove that person's
+  integration access.
+- **Protected users:** Select Yale users to hide from lists and protect from access
+  changes. Include owner and resident accounts you want protected. Own-code controls
+  still work for the configured resident.
+- **Notifications:** Optionally select a current `notify.*` service for the
+  administrator's login-health alerts. Leave it empty to disable notifications.
 
-| Key | Required / default | Meaning |
-| --- | --- | --- |
-| `session_file` | Optional; `/config/.yale_app_session.json` | App session file. Home Assistant must be able to read and replace it. |
-| `country` | Optional; `US` | Exactly two uppercase ASCII letters. Match the login helper's `--country`. |
-| `lock_id` | Required | Yale lock id from the helper's listing. |
-| `notify` | Required | A `notify.*` service for login health alerts. |
-| `protected_users` | Optional; `[]` | Yale user ids hidden from all user lists and protected from access changes. Include resident or owner accounts you want protected. |
-| `users` | Required | At least one Home Assistant user mapping. Unmapped users cannot use the API. |
-| `users[].ha_user_id` | Required | Quoted Home Assistant user id, exactly 32 hexadecimal characters. Each may appear once. |
-| `users[].role` | Required | `admin` or `guests`; see the visibility rules below. |
-| `users[].own_yale_user` | Optional | Resident's own Yale user id, allowing them to view and change their own PIN, including when protected. Does not grant list access. |
-| `users[].yale_users` | Optional; `[]` | Yale user ids explicitly assigned to this Home Assistant user for listing and management. |
+Yale choices show each user's name and either their keypad slot or “app user”,
+including protected users. Each Yale user can be selected as an own or assigned
+user only once across all people. The same user may also be protected. Configuration
+requires the integration to be loaded.
 
-Yale lock and user ids use 8–128 letters, digits, underscores, or hyphens. Each Yale
-user id may appear only once across all `own_yale_user` and `yale_users` assignments.
-It may also appear in `protected_users`.
+## Login health and reauthentication
+
+The session refreshes as Yale returns new tokens. `sensor.yale_access_login` reports
+`ok`, `expiring` (less than 14 days remaining), or `failed`, with an expiry attribute.
+A failed session starts Home Assistant's reauthentication flow and sends one alert
+per failed episode through the optional notification service:
+
+> Yale Access needs a new login. Open Settings → Devices & services to re-authenticate.
+
+Open the integration in **Settings → Devices & services** and complete the login
+and, if requested, verification steps again. Use an account that can still access
+the configured lock. Successful reauthentication reloads the integration and keeps
+its people, protection and notification settings.
 
 ## Roles and visibility rules
 
@@ -228,8 +160,8 @@ can retrieve the PIN with `pin`.
 Ending an imported resident or app user's PIN access leaves their app membership
 in place. An unverified PIN-only guest is removed by Yale after credential deletion.
 Error codes are `forbidden`, `not_found`, `protected`, `invalid_format`, `read_only`,
-`request_failed`, `upstream_unavailable`, and `pending`. Error messages contain no
-Yale response bodies or secrets.
+`request_failed`, `upstream_unavailable`, `pending`, and `not_ready` when no entry
+is loaded. Error messages contain no Yale response bodies or secrets.
 
 ## Building a UI
 
@@ -240,8 +172,10 @@ configured visibility rules apply.
 
 ## Security notes
 
-- Treat the session file as a credential. It contains an app token, is saved with
-  mode `600`, and must stay out of source control, logs, and issue reports.
+- The app token is stored privately by Home Assistant in `.storage/yale_access.session`,
+  separately from the integration entry. Protect Home Assistant storage and backups;
+  never include the token in source control, logs, or issue reports. Removing the
+  integration deletes its session store. Passwords and verification codes are not saved.
 - PINs are never logged or stored by the integration. They are returned only to an
   authorized caller through an explicit create or PIN request, and kept in memory
   only while processing requests. Tokens and PINs are excluded from entity states
@@ -256,5 +190,5 @@ configured visibility rules apply.
 
 Open an [issue](https://github.com/mikkelke/ha-yale-access/issues) with your Home
 Assistant and integration versions, lock model, country, command, error code, and
-steps to reproduce. Redact names and ids from configuration and helper output. Never
-include session files, tokens, passwords, PINs, or raw Yale API responses.
+steps to reproduce. Redact names and ids from configuration and screenshots. Never
+include storage files, tokens, passwords, PINs, or raw Yale API responses.

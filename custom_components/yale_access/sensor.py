@@ -5,23 +5,21 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import DOMAIN, SIGNAL_LOGIN
-from .session import SessionFile
+from .session import SessionStore
 
 
-async def async_setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    if discovery_info is not None:
-        async_add_entities([YaleLoginSensor(hass.data[DOMAIN].client.session_file)])
+    async_add_entities([YaleLoginSensor(hass.data[DOMAIN].client.session_store)])
 
 
 class YaleLoginSensor(SensorEntity):
@@ -29,7 +27,7 @@ class YaleLoginSensor(SensorEntity):
     _attr_unique_id = "yale_access_login"
     _attr_should_poll = False
 
-    def __init__(self, session: SessionFile) -> None:
+    def __init__(self, session: SessionStore) -> None:
         self._session = session
 
     @property

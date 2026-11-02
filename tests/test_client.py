@@ -14,8 +14,7 @@ from custom_components.yale_access.errors import (
     RequestFailed,
     UpstreamUnavailable,
 )
-from custom_components.yale_access.session import SessionFile
-from tests.test_session import token, write_session
+from tests.test_session import make_session, token
 
 LOCK_ID = "placeholder-lock"
 USER_ID = "placeholder-user"
@@ -54,9 +53,7 @@ class Session:
 
 
 def client(tmp_path, *responses, country="US"):
-    path = tmp_path / "session.json"
-    write_session(path, token(60))
-    session_file = SessionFile(str(path))
+    session_file = make_session(token(60))
     http = Session(*responses)
     return YaleClient(http, session_file, LOCK_ID, country=country), http, session_file
 
@@ -134,9 +131,7 @@ async def test_every_response_rotates_session_before_handling_status(tmp_path):
         await api.intent(USER_ID, {})
     assert session.token == rotated
     assert session.state == "ok"
-    assert (
-        json.loads((tmp_path / "session.json").read_text())["access_token"] == rotated
-    )
+    assert session._store.async_save.call_args.args[0]["access_token"] == rotated
 
 
 @pytest.mark.asyncio

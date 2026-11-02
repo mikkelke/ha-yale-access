@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import logging
 from collections import deque
@@ -13,13 +12,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import voluptuous as vol
 from homeassistant.components.websocket_api.http import WebSocketHandler
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityPlatformState
 
 from custom_components.yale_access import CONFIG_SCHEMA, api
-from custom_components.yale_access.const import DOMAIN, RELOGIN_COMMAND
+from custom_components.yale_access.const import DOMAIN
+from custom_components.yale_access.health import LoginMonitor
 from custom_components.yale_access.logging_filter import install_filter
-from custom_components.yale_access.login import LoginMonitor
 from custom_components.yale_access.sensor import YaleLoginSensor
 from custom_components.yale_access.service import MappedUser, UserMap
 
@@ -86,139 +84,10 @@ def websocket():
     return hass, service
 
 
-def test_config_defaults_and_validation():
-    result = CONFIG_SCHEMA(copy.deepcopy(CONFIG))[DOMAIN]
-    assert result["session_file"] == "/config/.yale_app_session.json"
-    assert result["country"] == "US"
-    assert result["protected_users"] == []
-    assert result["users"][0]["yale_users"] == []
+def test_config_entry_only_schema(caplog):
     assert CONFIG_SCHEMA({}) == {}
-    for changes in (
-        {"users": []},
-        {"users": [{"ha_user_id": "<placeholder>", "role": "admin"}]},
-        {"users": [{"ha_user_id": USER, "role": "owner"}]},
-        {"users": CONFIG[DOMAIN]["users"] * 2},
-        {"notify": "light.turn_on"},
-        {"lock_id": "../lock"},
-        {"unexpected": True},
-        {"session_file": ""},
-    ):
-        config = copy.deepcopy(CONFIG)
-        config[DOMAIN].update(changes)
-        with pytest.raises(vol.Invalid):
-            CONFIG_SCHEMA(config)
-
-
-@pytest.mark.parametrize("country", ["US", "DK", "GB"])
-def test_config_accepts_country(country):
-    config = copy.deepcopy(CONFIG)
-    config[DOMAIN]["country"] = country
-    assert CONFIG_SCHEMA(config)[DOMAIN]["country"] == country
-
-
-@pytest.mark.parametrize(
-    "country", ["dk", "Dk", "USA", "U", " US", "US\n", "ÜS", "12", "", None, 12]
-)
-def test_config_rejects_invalid_country(country):
-    config = copy.deepcopy(CONFIG)
-    config[DOMAIN]["country"] = country
-    with pytest.raises(vol.Invalid, match="two uppercase letters"):
-        CONFIG_SCHEMA(config)
-
-
-@pytest.mark.parametrize("ids", [[], ["Admin_placeholder-1"], ["a" * 8, "Z" * 128]])
-@pytest.mark.parametrize("key", ["protected_users", "yale_users"])
-def test_config_accepts_yale_user_ids(ids, key):
-    config = copy.deepcopy(CONFIG)
-    target = config[DOMAIN] if key == "protected_users" else config[DOMAIN]["users"][0]
-    target[key] = ids
-    result = CONFIG_SCHEMA(config)[DOMAIN]
-    result = result if key == "protected_users" else result["users"][0]
-    assert result[key] == ids
-
-
-@pytest.mark.parametrize(
-    "ids",
-    [
-        "Admin_placeholder",
-        None,
-        [12345678],
-        ["short"],
-        ["a" * 129],
-        ["../user-id"],
-        ["user id!!"],
-        ["valid_user\n"],
-    ],
-)
-@pytest.mark.parametrize("key", ["protected_users", "yale_users"])
-def test_config_rejects_invalid_yale_user_ids(ids, key):
-    config = copy.deepcopy(CONFIG)
-    target = config[DOMAIN] if key == "protected_users" else config[DOMAIN]["users"][0]
-    target[key] = ids
-    with pytest.raises(vol.Invalid):
-        CONFIG_SCHEMA(config)
-
-
-def test_config_rejects_yale_user_assigned_to_multiple_ha_users():
-    config = copy.deepcopy(CONFIG)
-    config[DOMAIN]["users"][0]["yale_users"] = ["Guest_placeholder"]
-    config[DOMAIN]["users"].append(
-        {
-            "ha_user_id": UNKNOWN,
-            "role": "guests",
-            "yale_users": ["Guest_placeholder"],
-        }
-    )
-    with pytest.raises(vol.Invalid, match="only be assigned to one HA user"):
-        CONFIG_SCHEMA(config)
-
-
-@pytest.mark.parametrize("uid", ["Resident_placeholder-1", "a" * 8, "Z" * 128])
-def test_config_accepts_own_yale_user(uid):
-    config = copy.deepcopy(CONFIG)
-    config[DOMAIN]["users"][0]["own_yale_user"] = uid
-    assert CONFIG_SCHEMA(config)[DOMAIN]["users"][0]["own_yale_user"] == uid
-
-
-@pytest.mark.parametrize(
-    "uid", [None, 12345678, "short", "a" * 129, "../user-id", "user id!!"]
-)
-def test_config_rejects_invalid_own_yale_user(uid):
-    config = copy.deepcopy(CONFIG)
-    config[DOMAIN]["users"][0]["own_yale_user"] = uid
-    with pytest.raises(vol.Invalid):
-        CONFIG_SCHEMA(config)
-
-
-@pytest.mark.parametrize(
-    "assignments",
-    [
-        [{"own_yale_user": "Resident_placeholder"}] * 2,
-        [
-            {
-                "own_yale_user": "Resident_placeholder",
-                "yale_users": ["Resident_placeholder"],
-            }
-        ],
-        [
-            {"own_yale_user": "Resident_placeholder"},
-            {"yale_users": ["Resident_placeholder"]},
-        ],
-        [
-            {"yale_users": ["Resident_placeholder"]},
-            {"own_yale_user": "Resident_placeholder"},
-        ],
-        [{"yale_users": ["Resident_placeholder", "Resident_placeholder"]}],
-    ],
-)
-def test_config_rejects_duplicate_own_and_assigned_yale_users(assignments):
-    config = copy.deepcopy(CONFIG)
-    config[DOMAIN]["users"] = [
-        {"ha_user_id": uid, "role": "guests", **assignment}
-        for uid, assignment in zip((USER, UNKNOWN), assignments, strict=False)
-    ]
-    with pytest.raises(vol.Invalid, match="only be assigned to one HA user"):
-        CONFIG_SCHEMA(config)
+    CONFIG_SCHEMA(CONFIG)
+    assert "does not support YAML setup" in caplog.text
 
 
 @pytest.mark.parametrize("command", MESSAGES)
@@ -395,32 +264,34 @@ async def test_pin_websocket_authorization(role, protected, caplog):
     assert "654321" not in json.dumps(store.saves)
 
 
-async def test_health_single_notify_and_recovery():
+async def test_health_single_notify_and_reauth_and_recovery():
     session = SimpleNamespace(state="ok")
     notify = AsyncMock()
-    repair = Mock()
+    reauth = Mock()
     changed = Mock()
-    monitor = LoginMonitor(lambda: session.state, notify, repair, changed)
+    monitor = LoginMonitor(lambda: session.state, notify, reauth, changed)
     await monitor.update()
     assert not notify.called
     session.state = "expiring"
     await monitor.update()
+    assert not reauth.called
+    assert not notify.called
     session.state = "failed"
     await monitor.update()
-    assert notify.await_count == 1
-    assert RELOGIN_COMMAND in notify.call_args.args[0]
-    assert "yale_login.py" in RELOGIN_COMMAND
-    assert "README" in RELOGIN_COMMAND
-    repair.assert_called_with(True)
+    await monitor.update()
+    reauth.assert_called_once()
+    notify.assert_awaited_once_with(
+        "Yale Access needs a new login. Open Settings → Devices & services to re-authenticate."
+    )
     session.state = "ok"
     await monitor.update()
-    repair.assert_called_with(False)
     session.state = "failed"
     await monitor.update()
+    assert reauth.call_count == 2
     assert notify.await_count == 2
 
 
-async def test_sensor_and_real_websocket_writer_never_publish_pin(tmp_path, caplog):
+async def test_sensor_and_real_websocket_writer_never_publish_pin(hass, caplog):
     from tests.test_service import GUEST_A, make_service
 
     service, _, store = await make_service()
@@ -435,7 +306,6 @@ async def test_sensor_and_real_websocket_writer_never_publish_pin(tmp_path, capl
     assert pin not in json.dumps(await service.list_users(GUEST_A))
     session = SimpleNamespace(state="ok", expires="2027-01-01T00:00:00Z")
     sensor = YaleLoginSensor(session)
-    hass = HomeAssistant(str(tmp_path))
     sensor.hass = hass
     sensor.entity_id = "sensor.yale_access_login"
     sensor._platform_state = EntityPlatformState.ADDED
@@ -486,72 +356,223 @@ async def test_sensor_and_real_websocket_writer_never_publish_pin(tmp_path, capl
     assert pin not in json.dumps(events, default=lambda value: value.as_dict())
 
 
+@pytest.mark.parametrize("command", MESSAGES)
+async def test_websocket_without_entry_returns_not_ready(command):
+    hass = FakeHass()
+    api.async_register_commands(hass)
+    handler, schema = hass.data["websocket_api"][command]
+    message = {"id": 1, "type": command, **MESSAGES[command]}
+    if schema is not False:
+        message = schema(message)
+    connection = FakeConnection(USER)
+    handler(hass, connection, message)
+    await asyncio.gather(*hass.tasks)
+    assert connection.errors == [("not_ready", "Yale Access is not loaded")]
+
+
+async def test_setup_registers_commands_once(hass, monkeypatch):
+    import custom_components.yale_access as integration
+
+    register = Mock(wraps=api.async_register_commands)
+    monkeypatch.setattr(api, "async_register_commands", register)
+    assert await integration.async_setup(hass, {})
+    assert await integration.async_setup(hass, {})
+    register.assert_called_once_with(hass)
+    assert set(hass.data["websocket_api"]) == set(MESSAGES)
+
+
 @pytest.mark.parametrize("country", ["US", "DK"])
-async def test_setup_missing_session_still_exposes_health_and_cleans_up(
-    tmp_path, monkeypatch, country
+async def test_entry_setup_unload_and_missing_session_reauth(
+    hass, monkeypatch, country
 ):
-    import aiohttp
-    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     import custom_components.yale_access as integration
 
-    hass = HomeAssistant(str(tmp_path))
     notifications = []
 
     async def notify(call):
         notifications.append(call.data)
 
     hass.services.async_register("notify", "mobile_app_admin_device", notify)
-    service = SimpleNamespace(load=AsyncMock(), refresh=AsyncMock())
     captured = {}
 
     def make_service(client, users, store, display_name, *, protected_users):
-        captured["client"] = client
-        captured["users"] = users
-        captured["protected_users"] = protected_users
+        service = SimpleNamespace(client=client, load=AsyncMock(), refresh=AsyncMock())
         service.refresh.side_effect = client.detail
+        captured.update(service=service, users=users, protected_users=protected_users)
         return service
 
     monkeypatch.setattr(integration, "YaleAccessService", make_service)
-    monkeypatch.setattr(
-        integration,
-        "async_create_clientsession",
-        lambda hass, **kwargs: aiohttp.ClientSession(**kwargs),
-    )
-    discovery = AsyncMock()
-    monkeypatch.setattr(integration.discovery, "async_load_platform", discovery)
-    repair = Mock()
-    monkeypatch.setattr(integration.ir, "async_create_issue", repair)
-    monkeypatch.setattr(integration.ir, "async_delete_issue", Mock())
+    forward = AsyncMock()
+    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", forward)
+    unload = AsyncMock(return_value=True)
+    monkeypatch.setattr(hass.config_entries, "async_unload_platforms", unload)
+    reauth = Mock()
+    monkeypatch.setattr(MockConfigEntry, "async_start_reauth", reauth)
     cancel = Mock()
     interval = Mock(return_value=cancel)
     monkeypatch.setattr(integration, "async_track_time_interval", interval)
-    config = copy.deepcopy(CONFIG)
-    config[DOMAIN]["session_file"] = str(tmp_path / "missing-session.json")
-    config[DOMAIN]["country"] = country
-    config[DOMAIN]["protected_users"] = ["Admin_placeholder"]
-    config[DOMAIN]["users"][0]["yale_users"] = ["Guest_placeholder"]
-    config[DOMAIN]["users"][0]["own_yale_user"] = "Resident_placeholder"
-    assert await integration.async_setup(hass, CONFIG_SCHEMA(config))
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Front door",
+        data={
+            "lock_id": "LOCK_PLACEHOLDER",
+            "country": country,
+            "install_id": "placeholder",
+        },
+        options={
+            "users": [
+                {
+                    "ha_user_id": USER,
+                    "role": "admin",
+                    "yale_users": ["Guest_placeholder"],
+                    "own_yale_user": "Resident_placeholder",
+                }
+            ],
+            "protected_users": ["Admin_placeholder"],
+            "notify": "notify.mobile_app_admin_device",
+        },
+    )
+    entry.add_to_hass(hass)
+    assert await integration.async_setup(hass, {})
+    assert await integration.async_setup_entry(hass, entry)
     await hass.async_block_till_done()
+    service = captured["service"]
     service.load.assert_awaited_once()
     service.refresh.assert_awaited_once()
+    assert hass.data[DOMAIN] is service
     assert captured["protected_users"] == ["Admin_placeholder"]
     assert captured["users"].require(USER).yale_users == ("Guest_placeholder",)
-    assert captured["users"].owner("Guest_placeholder") == USER
     assert captured["users"].require(USER).own == "Resident_placeholder"
-    assert captured["users"].owner("Resident_placeholder") is None
-    assert captured["client"].session_file.state == "failed"
-    assert captured["client"]._country == country
+    assert service.client.session_store.state == "failed"
+    assert service.client._country == country
+    assert service.client._session._retry_connection is False
+    forward.assert_awaited_once()
+    reauth.assert_called_once_with(hass)
     assert len(notifications) == 1
-    assert RELOGIN_COMMAND in notifications[0]["message"]
-    repair.assert_called_once()
-    discovery.assert_awaited_once()
-    assert set(hass.data["websocket_api"]) == set(MESSAGES)
-    assert captured["client"]._session._retry_connection is False
-    await interval.call_args.args[1]()
-    assert len(notifications) == 1
-    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    interval.call_args.args[1]()
     await hass.async_block_till_done()
+    assert len(notifications) == 1
+    reauth.assert_called_once()
+    assert await integration.async_unload_entry(hass, entry)
+    await entry._async_process_on_unload(hass)
     cancel.assert_called_once()
-    await captured["client"]._session.close()
+    assert DOMAIN not in hass.data
+    interval.call_args.args[1]()
+    await hass.async_block_till_done()
+    assert service.refresh.await_count == 2
+
+
+async def test_entry_unload_cancels_refresh_in_progress(hass, monkeypatch):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    import custom_components.yale_access as integration
+
+    began = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def refresh():
+        began.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    service = SimpleNamespace(
+        client=SimpleNamespace(session_store=SimpleNamespace(state_changed=None)),
+        load=AsyncMock(),
+        refresh=refresh,
+    )
+    monkeypatch.setattr(integration, "YaleAccessService", Mock(return_value=service))
+    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", AsyncMock())
+    monkeypatch.setattr(
+        hass.config_entries, "async_unload_platforms", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(MockConfigEntry, "async_start_reauth", Mock())
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "lock_id": "LOCK_PLACEHOLDER",
+            "country": "US",
+            "install_id": "placeholder",
+        },
+    )
+    entry.add_to_hass(hass)
+    assert await integration.async_setup_entry(hass, entry)
+    await began.wait()
+    assert await integration.async_unload_entry(hass, entry)
+    assert cancelled.is_set()
+    await entry._async_process_on_unload(hass)
+
+
+async def test_entry_options_update_reloads_and_removal_clears_session(
+    hass, monkeypatch
+):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    import custom_components.yale_access as integration
+    from custom_components.yale_access.session import SessionStore
+    from tests.test_session import token
+
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    reload = AsyncMock()
+    monkeypatch.setattr(hass.config_entries, "async_reload", reload)
+    await integration.async_options_updated(hass, entry)
+    reload.assert_awaited_once_with(entry.entry_id)
+    await SessionStore(hass).rotate(token(60))
+    await integration.async_remove_entry(hass, entry)
+    assert await SessionStore(hass)._store.async_load() is None
+
+
+async def test_real_entry_sensor_health_and_unload(hass, monkeypatch):
+    from homeassistant.helpers import entity_registry as er
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    import custom_components.yale_access as integration
+    from custom_components.yale_access.session import SessionStore
+    from tests.test_session import token
+
+    await SessionStore(hass).rotate(token(60))
+    captured = {}
+
+    def make_service(client, users, store, display_name, *, protected_users):
+        service = SimpleNamespace(client=client, load=AsyncMock(), refresh=AsyncMock())
+        captured["service"] = service
+        return service
+
+    monkeypatch.setattr(integration, "YaleAccessService", make_service)
+    reauth = Mock()
+    monkeypatch.setattr(MockConfigEntry, "async_start_reauth", reauth)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Front door",
+        unique_id="LOCK_PLACEHOLDER",
+        data={
+            "lock_id": "LOCK_PLACEHOLDER",
+            "country": "US",
+            "install_id": "placeholder",
+        },
+        options={"users": [], "protected_users": [], "notify": None},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entity_id = "sensor.yale_access_login"
+    assert hass.states.get(entity_id).state == "ok"
+    registry_entry = er.async_get(hass).async_get(entity_id)
+    assert registry_entry.unique_id == "yale_access_login"
+    assert registry_entry.config_entry_id == entry.entry_id
+    service = captured["service"]
+    assert hass.data[DOMAIN] is service
+    reauth.assert_not_called()
+    await service.client.session_store.mark_failed()
+    await service.client.session_store.mark_failed()
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "failed"
+    reauth.assert_called_once_with(hass)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "unavailable"
+    assert DOMAIN not in hass.data
