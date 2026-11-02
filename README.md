@@ -5,6 +5,8 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/docs/faq/custom_repositories/)
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+<img src="https://raw.githubusercontent.com/mikkelke/ha-yale-access/main/custom_components/yale_access/brand/icon.png" alt="Yale Access icon" width="96" align="right">
+
 A Home Assistant custom integration for listing Yale lock users and managing guest
 PINs through Home Assistant's authenticated WebSocket API. Administrators and guest
 managers receive different access, and residents can view and change their own code.
