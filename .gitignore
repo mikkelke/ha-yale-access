@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.yale_app_session.json
+yale_app_session.json
+*yale*session*.json
+.yale-session-*
+.ruff_cache/

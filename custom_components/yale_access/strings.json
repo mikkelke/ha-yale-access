@@ -1,0 +1,8 @@
+{
+  "issues": {
+    "login": {
+      "title": "Yale app login needs attention",
+      "description": "{command}. The integration reloads the session file automatically."
+    }
+  }
+}

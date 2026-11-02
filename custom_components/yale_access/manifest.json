@@ -1,0 +1,12 @@
+{
+  "domain": "yale_access",
+  "name": "Yale Access",
+  "codeowners": ["@mikkelke"],
+  "dependencies": ["websocket_api"],
+  "documentation": "https://github.com/mikkelke/ha-yale-access",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/mikkelke/ha-yale-access/issues",
+  "requirements": [],
+  "version": "0.2.0"
+}
